@@ -26,7 +26,38 @@ def setup_mlflow():
         print("Local Mode: Setting local tracking URI.")
         mlflow.set_tracking_uri("http://127.0.0.1:5000")
         
-    mlflow.set_experiment("Latihan CI MLProject")
+    # Only set experiment if not running within an MLflow Project context
+    if "MLFLOW_RUN_ID" not in os.environ:
+        mlflow.set_experiment("Latihan CI MLProject")
+
+def run_training(X_train, y_train, X_test, y_test, args):
+    print(f"Training RandomForest(n_estimators={args.n_estimators}, max_depth={args.max_depth})...")
+    model = RandomForestClassifier(n_estimators=args.n_estimators, max_depth=args.max_depth, random_state=42)
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    print(f"Accuracy: {acc:.4f}")
+    
+    # Log parameters
+    mlflow.log_param("n_estimators", args.n_estimators)
+    mlflow.log_param("max_depth", args.max_depth)
+    
+    # Log metrics
+    mlflow.log_metric("accuracy", acc)
+    
+    # Infer model signature (Inputs and Outputs schema)
+    from mlflow.models import infer_signature
+    signature = infer_signature(X_train, model.predict(X_train))
+    
+    # Log model with signature
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="model",
+        signature=signature,
+        registered_model_name="GermanCreditCIModel"
+    )
+    print("Model training and logging completed successfully.")
 
 def train():
     args = parse_args()
@@ -48,35 +79,16 @@ def train():
     X_test = test_df.drop(columns=['Risk'])
     y_test = test_df['Risk']
     
-    print(f"Training RandomForest(n_estimators={args.n_estimators}, max_depth={args.max_depth})...")
-    with mlflow.start_run(run_name="CI_MLProject_Run"):
-        model = RandomForestClassifier(n_estimators=args.n_estimators, max_depth=args.max_depth, random_state=42)
-        model.fit(X_train, y_train)
-        
-        y_pred = model.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
-        print(f"Accuracy: {acc:.4f}")
-        
-        # Log parameters
-        mlflow.log_param("n_estimators", args.n_estimators)
-        mlflow.log_param("max_depth", args.max_depth)
-        
-        # Log metrics
-        mlflow.log_metric("accuracy", acc)
-        
-        # Infer model signature (Inputs and Outputs schema)
-        from mlflow.models import infer_signature
-        signature = infer_signature(X_train, model.predict(X_train))
-        
-        # Log model with signature
-        mlflow.sklearn.log_model(
-            sk_model=model,
-            artifact_path="model",
-            signature=signature,
-            registered_model_name="GermanCreditCIModel"
-        )
-        
-        print("Model training and logging completed successfully.")
+    # Check if we are running inside an MLflow project run
+    is_project_run = "MLFLOW_RUN_ID" in os.environ
+    
+    if is_project_run:
+        # Just train and log directly to the active run managed by MLflow
+        run_training(X_train, y_train, X_test, y_test, args)
+    else:
+        # Running manually, start a new run
+        with mlflow.start_run(run_name="CI_MLProject_Run"):
+            run_training(X_train, y_train, X_test, y_test, args)
 
 if __name__ == '__main__':
     train()

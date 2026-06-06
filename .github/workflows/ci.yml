@@ -45,7 +45,7 @@ jobs:
         export MLFLOW_TRACKING_PASSWORD="${{ secrets.DAGSHUB_TOKEN }}"
         
         # Run MLflow project using local env-manager (runner has no Conda by default)
-        mlflow run MLProject --env-manager=local --entry-point main -P n_estimators=150 -P max_depth=8 > run_output.log 2>&1 || (cat run_output.log && exit 1)
+        mlflow run MLProject --env-manager=local --experiment-name "Latihan CI MLProject" --entry-point main -P n_estimators=150 -P max_depth=8 > run_output.log 2>&1 || (cat run_output.log && exit 1)
         cat run_output.log
         
         # Parse run_id from DagsHub or log
