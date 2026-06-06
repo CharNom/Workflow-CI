@@ -1,0 +1,112 @@
+name: Model Training CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  train-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Set up job
+    # 2. Run actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # 3. Set up Python 3.12.7
+    - name: Set up Python 3.12.7
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12.7'
+
+    # 4. Check Env
+    - name: Check Env
+      run: |
+        python --version
+        pip --version
+
+    # 5. Install dependencies
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas numpy scikit-learn mlflow==2.19.0 dagshub
+
+    # 6. Run mlflow project & 7. Get latest MLflow run_id
+    - name: Run MLflow Project and get run_id
+      id: run_project
+      run: |
+        # Set credentials
+        export MLFLOW_TRACKING_URI="https://dagshub.com/charnom/MSML-Submission.mlflow"
+        export MLFLOW_TRACKING_USERNAME="${{ secrets.DAGSHUB_USERNAME }}"
+        export MLFLOW_TRACKING_PASSWORD="${{ secrets.DAGSHUB_TOKEN }}"
+        
+        # Run MLflow project and output logs to file
+        mlflow run MLProject --entry-point main -P n_estimators=150 -P max_depth=8 > run_output.log 2>&1
+        cat run_output.log
+        
+        # Parse run_id from DagsHub or log
+        # Alternatively, we can search the MLflow active experiment runs
+        python -c "
+        import mlflow
+        import os
+        mlflow.set_tracking_uri(os.environ['MLFLOW_TRACKING_URI'])
+        experiment = mlflow.get_experiment_by_name('Latihan CI MLProject')
+        runs = mlflow.search_runs([experiment.experiment_id], order_by=['start_time DESC'], max_results=1)
+        run_id = runs.iloc[0]['run_id']
+        print(f'RUN_ID={run_id}')
+        with open('run_id.txt', 'w') as f:
+            f.write(run_id)
+        "
+        echo "RUN_ID=$(cat run_id.txt)" >> $GITHUB_ENV
+      env:
+        DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+        DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+
+    # 8. Install Python dependencies
+    - name: Install extra python dependencies
+      run: |
+        pip install matplotlib seaborn
+
+    # 9. Upload to GitHub Artifacts
+    - name: Upload logs and output
+      uses: actions/upload-artifact@v4
+      with:
+        name: training-logs
+        path: |
+          run_output.log
+          run_id.txt
+
+    # 10. Build Docker Model
+    - name: Build Docker Model
+      run: |
+        export MLFLOW_TRACKING_URI="https://dagshub.com/charnom/MSML-Submission.mlflow"
+        export MLFLOW_TRACKING_USERNAME="${{ secrets.DAGSHUB_USERNAME }}"
+        export MLFLOW_TRACKING_PASSWORD="${{ secrets.DAGSHUB_TOKEN }}"
+        # Build docker image from DagsHub model artifact
+        mlflow models build-docker -m "runs:/${{ env.RUN_ID }}/model" -n "charnom/msml-model:latest"
+      env:
+        DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+        DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+
+    # 11. Log in to Docker Hub
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    # 12. Tag Docker Image
+    - name: Tag Docker Image
+      run: |
+        docker tag charnom/msml-model:latest ${{ secrets.DOCKER_USERNAME }}/msml-model:${{ env.RUN_ID }}
+        docker tag charnom/msml-model:latest ${{ secrets.DOCKER_USERNAME }}/msml-model:latest
+
+    # 13. Push Docker Image
+    - name: Push Docker Image
+      run: |
+        docker push ${{ secrets.DOCKER_USERNAME }}/msml-model:${{ env.RUN_ID }}
+        docker push ${{ secrets.DOCKER_USERNAME }}/msml-model:latest
